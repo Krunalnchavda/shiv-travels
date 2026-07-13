@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0f4c81">
+<title>Shiv Travels — Urbania Partner Manager</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-logo">🚐</span>
+    <div>
+      <div class="brand-name">Shiv Travels</div>
+      <div class="brand-sub">Urbania Partner Manager</div>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <button id="notifBtn" class="icon-btn" title="Notifications">🔔<span id="notifBadge" class="badge hidden">0</span></button>
+    <button id="themeBtn" class="icon-btn" title="Toggle dark / light theme">🌙</button>
+  </div>
+</header>
+
+<nav class="tabs" id="mainTabs">
+  <button class="tab active" data-view="dashboard">📊 Dashboard</button>
+  <button class="tab" data-view="trips">🧳 Trips</button>
+  <button class="tab" data-view="drivers">👨‍✈️ Drivers</button>
+  <button class="tab" data-view="clients">🤝 Clients</button>
+  <button class="tab" data-view="vehicles">🚐 Vehicles</button>
+  <button class="tab" data-view="purchase">🧾 Purchase</button>
+  <button class="tab" data-view="investments">💰 Investment</button>
+  <button class="tab" data-view="expenses">💸 Expenses</button>
+  <button class="tab" data-view="profit">💹 Profit</button>
+  <button class="tab" data-view="reports">📈 Reports</button>
+  <button class="tab" data-view="settings">⚙️ Settings</button>
+</nav>
+
+<div class="layout">
+<aside class="side-nav" id="sideNav"></aside>
+<main id="viewContainer">
+  <section id="view-dashboard" class="view active"></section>
+  <section id="view-trips" class="view"></section>
+  <section id="view-drivers" class="view"></section>
+  <section id="view-clients" class="view"></section>
+  <section id="view-vehicles" class="view"></section>
+  <section id="view-purchase" class="view"></section>
+  <section id="view-investments" class="view"></section>
+  <section id="view-expenses" class="view"></section>
+  <section id="view-profit" class="view"></section>
+  <section id="view-reports" class="view"></section>
+  <section id="view-settings" class="view"></section>
+</main>
+</div>
+
+<div id="modalOverlay" class="modal-overlay hidden">
+  <div class="modal" id="modalBox">
+    <div class="modal-header">
+      <h2 id="modalTitle">Modal</h2>
+      <button class="icon-btn" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
