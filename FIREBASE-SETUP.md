@@ -15,15 +15,22 @@ are the steps. Budget about 15 minutes.
 2. **Add project** → name it `shiv-travels` → Continue
 3. Google Analytics: **turn it off**, you do not need it → Create project
 
+> **Console navigation.** Newer Firebase consoles have no "Build" menu — the
+> left sidebar lists **Product categories** instead. Both namings are given
+> below; use whichever your console shows.
+
 ## 2. Create the database
 
-1. Left menu → **Build → Firestore Database** → **Create database**
-2. Location: **asia-south1 (Mumbai)** — closest to you, so it is fastest
+1. Left menu → **Databases & Storage → Firestore Database**
+   (older consoles: **Build → Firestore Database**) → **Create database**
+2. Location: **asia-south1 (Mumbai)** — closest to you, so it is fastest.
+   **This cannot be changed later.**
 3. Start in **production mode** (we paste proper rules in step 5)
 
 ## 3. Turn on logins
 
-1. Left menu → **Build → Authentication** → **Get started**
+1. Left menu → **Security → Authentication**
+   (older consoles: **Build → Authentication**) → **Get started**
 2. Choose **Email/Password** → enable the first toggle → **Save**
 3. Go to the **Users** tab → **Add user**, twice:
 
