@@ -1,0 +1,43 @@
+rules_version = '2';
+
+/* Shiv Travels — Firestore security rules
+   Paste these into Firebase console → Firestore Database → Rules → Publish.
+
+   These are the real enforcement. The hiding of buttons in the app is only for
+   tidiness; this is what actually stops a guest writing, and it holds even if
+   someone edits the page or calls the API directly. */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // the role lives in a document the user cannot write, so nobody can promote themselves
+    function role() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return signedIn() && role() == 'admin';
+    }
+
+    // each person may read their own role record; only the console can change it
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // envs/prod = real business data, envs/dev = the scratch copy localhost uses
+    match /envs/{env}/{document=**} {
+      allow read:  if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // anything not named above is closed
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

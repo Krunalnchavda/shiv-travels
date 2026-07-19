@@ -59,7 +59,14 @@ function loadDB() {
     return defaultDB();
   }
 }
-function saveDB() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+/* Every write in the app ends up here, which makes it the one place that has to
+   know about the cloud. The local copy is always written first so the app stays
+   instant and works offline; Sync.push() then diffs against the last known
+   server state and uploads only what actually changed. */
+function saveDB() {
+  localStorage.setItem(DB_KEY, JSON.stringify(db));
+  if (window.Sync && Sync.active) Sync.push();
+}
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
 // ---------- Helpers ----------
@@ -1928,8 +1935,37 @@ function loadSampleData() {
   saveDB(); render(); toast('Sample data loaded ✔');
 }
 
-/* ---------- Init ---------- */
-applyTheme();
-// reopen on the tab that was active before the refresh
-const savedView = localStorage.getItem(VIEW_KEY);
-showView(savedView && $(`#mainTabs .tab[data-view="${savedView}"]`) ? savedView : 'dashboard');
+/* =====================================================
+   SYNC STATUS
+   A one-glance answer to "is my phone actually up to date?"
+   ===================================================== */
+function updateSyncBadge() {
+  const el = $('#syncBadge');
+  if (!el) return;
+  const s = window.Sync || { status: 'local', env: 'prod' };
+  const look = {
+    local:        ['💾', 'This device only — cloud sync not set up', 'local'],
+    connecting:   ['🔄', 'Connecting to cloud…', 'busy'],
+    saving:       ['🔄', 'Saving…', 'busy'],
+    synced:       ['☁️', 'Synced — all devices up to date', 'ok'],
+    'signed-out': ['', '', 'ok'],
+    error:        ['⚠️', 'Sync problem: ' + (s.error || 'unknown'), 'bad'],
+  }[s.status] || ['', '', 'ok'];
+
+  el.textContent = look[0] + (s.env === 'dev' && s.status !== 'local' ? ' TEST' : '');
+  el.title = look[1] + (s.env === 'dev' ? ' · TEST database (localhost) — real data is untouched' : '');
+  el.className = 'sync-badge ' + look[2];
+  el.classList.toggle('hidden', !look[0]);
+}
+
+/* ---------- Init ----------
+   Called by sync.js once it knows whether a cloud is configured, so the app
+   never paints a signed-in screen before the account is settled. */
+function startApp() {
+  applyTheme();
+  updateSyncBadge();
+  // reopen on the tab that was active before the refresh
+  const savedView = localStorage.getItem(VIEW_KEY);
+  showView(savedView && $(`#mainTabs .tab[data-view="${savedView}"]`) ? savedView : 'dashboard');
+  initAuth();
+}

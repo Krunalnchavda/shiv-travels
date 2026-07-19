@@ -339,6 +339,14 @@ body.locked .topbar, body.locked .tabs, body.locked .layout { display: none; }
 }
 .eye-btn:hover { background: var(--surface-2); }
 
+/* ---------- Sync status ---------- */
+.sync-badge {
+  font-size: 13px; padding: 4px 8px; border-radius: 8px; cursor: default;
+  background: rgba(255, 255, 255, .14); white-space: nowrap; line-height: 1.4;
+}
+.sync-badge.busy { opacity: .75; }
+.sync-badge.bad { background: var(--red); color: #fff; }
+
 /* ---------- Signed-in user chip ---------- */
 .user-chip { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; margin-right: 4px; }
 .user-name { font-size: 13px; font-weight: 700; }

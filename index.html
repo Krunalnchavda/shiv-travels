@@ -59,6 +59,7 @@
   </div>
   <div class="topbar-actions">
     <div id="userChip" class="user-chip"></div>
+    <span id="syncBadge" class="sync-badge hidden" title=""></span>
     <button id="notifBtn" class="icon-btn" title="Notifications">🔔<span id="notifBadge" class="badge hidden">0</span></button>
     <button id="themeBtn" class="icon-btn" title="Toggle dark / light theme">🌙</button>
     <button id="logoutBtn" class="icon-btn hidden" title="Sign out">🚪</button>
@@ -110,10 +111,13 @@
 
 <div id="toast" class="toast hidden"></div>
 
+<script src="firebase-config.js"></script>
 <script src="auth.js"></script>
 <script src="app.js"></script>
+<!-- sync.js is a module, so it runs after the two scripts above are defined.
+     It decides whether a cloud is configured and then calls startApp(). -->
+<script type="module" src="sync.js"></script>
 <script>
-  initAuth();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

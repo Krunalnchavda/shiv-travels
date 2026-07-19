@@ -94,14 +94,48 @@ function hideLogin() {
   document.getElementById('loginScreen').classList.add('hidden');
 }
 
+function cloudMode() { return !!(window.Sync && Sync.configured); }
+
 async function handleLogin(e) {
   e.preventDefault();
   const err = document.getElementById('loginError');
+  const btn = document.querySelector('.login-btn');
   const wait = Math.ceil((lockedUntil - Date.now()) / 1000);
   if (wait > 0) { err.textContent = `Too many attempts. Try again in ${wait}s.`; return; }
 
   const username = document.getElementById('loginUser').value.trim().toLowerCase();
   const password = document.getElementById('loginPass').value;
+
+  // With a cloud configured the account lives in Firebase, so it is the same
+  // login on every device and the role is enforced server-side.
+  if (cloudMode()) {
+    err.textContent = '';
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      await Sync.signIn(username, password);
+      // onCloudSignedIn() takes over from here via onAuthStateChanged
+    } catch (ex) {
+      // setup mistakes get their own message — the raw Firebase text is no help
+      const msg = {
+        'auth/invalid-credential': 'Incorrect username or password.',
+        'auth/invalid-email': 'Incorrect username or password.',
+        'auth/user-not-found': 'Incorrect username or password.',
+        'auth/wrong-password': 'Incorrect username or password.',
+        'auth/too-many-requests': 'Too many attempts. Try again in a few minutes.',
+        'auth/network-request-failed': 'No internet connection.',
+        'auth/api-key-not-valid.-please-pass-a-valid-api-key.': 'Setup problem: the Firebase config in firebase-config.js is not valid.',
+        'auth/invalid-api-key': 'Setup problem: the Firebase config in firebase-config.js is not valid.',
+        'auth/configuration-not-found': 'Setup problem: turn on Email/Password sign-in in Firebase → Authentication → Sign-in method.',
+        'auth/operation-not-allowed': 'Setup problem: turn on Email/Password sign-in in Firebase → Authentication → Sign-in method.',
+      }[ex.code] || ex.message;
+      err.textContent = msg;
+      document.getElementById('loginPass').select();
+    } finally {
+      btn.disabled = false; btn.textContent = 'Sign In';
+    }
+    return;
+  }
+
   const user = users.find(u => u.username === username);
   const hash = await hashPass(password);
 
@@ -125,9 +159,53 @@ async function handleLogin(e) {
 function logout() {
   if (!confirm('Sign out of Shiv Travels?')) return;
   localStorage.removeItem(AUTH_SESSION_KEY);
+  if (cloudMode()) { Sync.signOut(); return; } // onCloudSignedOut() finishes up
   currentUser = null;
   applyRoleUI();
   showLogin();
+}
+
+/* ---------- called by sync.js when Firebase settles ---------- */
+function onCloudSignedIn(user) {
+  currentUser = { username: user.username, role: user.role, name: user.name, uid: user.uid };
+  hideLogin();
+  applyRoleUI();
+  if (typeof render === 'function') render();
+  if (typeof toast === 'function') toast(`Welcome, ${currentUser.name} 👋`);
+  maybeOfferUpload();
+}
+
+function onCloudSignedOut() {
+  currentUser = null;
+  applyRoleUI();
+  showLogin();
+}
+
+/* First admin sign-in against an empty cloud: offer to lift whatever is already
+   in this browser up to the shared database, so the other devices are not
+   looking at a blank app. Only ever offered when the cloud has no records. */
+let uploadOffered = false;
+async function maybeOfferUpload() {
+  if (uploadOffered || !cloudMode() || !canEdit()) return;
+  uploadOffered = true;
+  // wait for the first full snapshot so "is the cloud empty?" is a real answer
+  const started = Date.now();
+  while (!Sync.ready && Date.now() - started < 8000) await new Promise(r => setTimeout(r, 200));
+  if (!Sync.ready || !Sync.isEmpty()) return;
+
+  let local;
+  try { local = JSON.parse(localStorage.getItem(DB_KEY)); } catch (e) { return; }
+  const count = local ? ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments']
+    .reduce((n, k) => n + (local[k] || []).length, 0) : 0;
+  if (!count) return;
+
+  if (!confirm(`The ${Sync.env === 'dev' ? 'TEST' : 'shared'} database is empty, but this browser has ${count} records.\n\nUpload them now so your other devices can see them?`)) return;
+  try {
+    await Sync.uploadLocalData(local);
+    toast('Uploaded to cloud ✔');
+  } catch (ex) {
+    alert('Upload failed: ' + ex.message);
+  }
 }
 
 /* password show / hide eye */
@@ -152,6 +230,42 @@ function togglePasswordFor(btn, inputId) {
 /* ---------- change password (admin, from Settings) ---------- */
 function openPasswordForm() {
   if (!requireEdit()) return;
+
+  // Firebase only lets a signed-in user change their own password, and it wants
+  // the current one first. Other accounts are managed from the Firebase console.
+  if (cloudMode()) {
+    openModal('Change Password', `
+      <form onsubmit="saveCloudPassword(event)">
+        <p class="muted">Changing the password for <b>${esc(currentUser ? currentUser.username : '')}</b>. This applies on every device straight away.</p>
+        <div class="form-grid">
+          <div class="field full"><label>Current password</label>
+            <div class="pass-wrap">
+              <input type="password" id="pwCur" name="cur" required autocomplete="current-password">
+              <button type="button" class="eye-btn" onclick="togglePasswordFor(this,'pwCur')" aria-label="Show password">👁️</button>
+            </div>
+          </div>
+          <div class="field full"><label>New password</label>
+            <div class="pass-wrap">
+              <input type="password" id="pwNew" name="pw1" minlength="6" required autocomplete="new-password">
+              <button type="button" class="eye-btn" onclick="togglePasswordFor(this,'pwNew')" aria-label="Show password">👁️</button>
+            </div>
+          </div>
+          <div class="field full"><label>Confirm new password</label>
+            <div class="pass-wrap">
+              <input type="password" id="pwConfirm" name="pw2" minlength="6" required autocomplete="new-password">
+              <button type="button" class="eye-btn" onclick="togglePasswordFor(this,'pwConfirm')" aria-label="Show password">👁️</button>
+            </div>
+          </div>
+        </div>
+        <p class="muted">Minimum 6 characters. To change the <b>guest</b> password, use the Firebase console → Authentication → Users.</p>
+        <div class="btn-row">
+          <button type="button" class="btn ghost" onclick="requestCloseModal()">Cancel</button>
+          <button type="submit" class="btn primary">Save Password</button>
+        </div>
+      </form>`);
+    return;
+  }
+
   const opts = users.map(u => `<option value="${u.username}">${u.name} (${u.username} — ${u.role})</option>`).join('');
   openModal('Change Password', `
     <form onsubmit="savePassword(event)">
@@ -191,8 +305,28 @@ async function savePassword(e) {
   toast(`Password updated for ${user.username} ✔`);
 }
 
+async function saveCloudPassword(e) {
+  e.preventDefault();
+  if (!requireEdit()) return;
+  const f = new FormData(e.target);
+  if (f.get('pw1') !== f.get('pw2')) { alert('The two passwords do not match.'); return; }
+  try {
+    await Sync.changePassword(f.get('cur'), f.get('pw1'));
+    closeModal();
+    toast('Password updated on all devices ✔');
+  } catch (ex) {
+    alert(ex.code === 'auth/invalid-credential' || ex.code === 'auth/wrong-password'
+      ? 'The current password is not correct.'
+      : 'Could not change password: ' + ex.message);
+  }
+}
+
 function resetLogins() {
   if (!requireEdit()) return;
+  if (cloudMode()) {
+    alert('Cloud accounts are managed in the Firebase console:\nAuthentication → Users → ⋮ → Reset password.');
+    return;
+  }
   if (!confirm('Reset both logins back to their default passwords?\n\nYour trips, drivers and other business data are NOT touched.')) return;
   localStorage.removeItem(AUTH_USERS_KEY);
   seedUsers().then(() => toast('Logins reset to defaults ✔'));
@@ -270,10 +404,19 @@ function applyRoleUI() {
 
 /* ---------- boot ---------- */
 async function initAuth() {
-  await seedUsers();
-  currentUser = loadSession();
   document.getElementById('loginForm').addEventListener('submit', handleLogin);
   document.getElementById('logoutBtn').addEventListener('click', logout);
+
+  if (cloudMode()) {
+    // Firebase decides who is signed in; onCloudSignedIn/Out drive the screen.
+    // Show the login card in the meantime rather than flashing the app.
+    showLogin();
+    applyRoleUI();
+    return;
+  }
+
+  await seedUsers();
+  currentUser = loadSession();
   if (currentUser) { hideLogin(); } else { showLogin(); }
   applyRoleUI();
   if (typeof render === 'function') render();

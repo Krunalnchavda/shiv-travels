@@ -1,9 +1,33 @@
 # Shiv Travels — Urbania Partner Manager
 
-Local-first web app for the Urbania rental business. All data is stored in the
-browser on the device (Settings → Backup to export/restore as JSON).
+Web app for the Urbania rental business, usable on desktop and phone.
+
+## Data storage
+
+The app runs in one of two modes, decided by whether `firebase-config.js` has
+been filled in:
+
+- **Cloud (real-time sync).** Every signed-in device shares one database and
+  changes appear on the others within a second. Works offline and catches up
+  when the connection returns. **Setup: [FIREBASE-SETUP.md](FIREBASE-SETUP.md)**
+- **Local only (the default until you configure Firebase).** Data lives in one
+  browser on one device. Settings → Backup exports/restores it as JSON.
+
+Sync deliberately keeps two separate datasets in the same Firebase project:
+`envs/prod` for the deployed site, and `envs/dev` used automatically whenever
+the app runs on localhost — so testing on a laptop can never alter real trips.
+The header badge shows which one is in use.
+
+All writes funnel through `saveDB()` in `app.js`, which is the only place that
+knows about the cloud: it saves locally first, then `Sync.push()` diffs against
+the last known server state and uploads only what changed.
 
 ## Logins
+
+In **cloud mode** the accounts live in Firebase, so the same username and
+password work on every device and the role is enforced by the server.
+
+In **local mode** two accounts are seeded into the browser:
 
 | Username | Password   | Access |
 |----------|------------|--------|
