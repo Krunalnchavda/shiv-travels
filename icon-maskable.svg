@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- maskable: artwork kept inside the safe circle so Android can crop it to any shape -->
+  <rect width="512" height="512" fill="#0f4c81"/>
+  <text x="256" y="256" font-size="200" text-anchor="middle" dominant-baseline="middle">🚐</text>
+</svg>

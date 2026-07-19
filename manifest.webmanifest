@@ -1,0 +1,16 @@
+{
+  "name": "Shiv Travels — Urbania Partner Manager",
+  "short_name": "Shiv Travels",
+  "description": "Trips, drivers, clients, vehicles, expenses and partner profit sharing for Shiv Travels.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f2f5f9",
+  "theme_color": "#0f4c81",
+  "lang": "en-IN",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

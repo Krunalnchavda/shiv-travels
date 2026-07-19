@@ -112,6 +112,8 @@ function openModal(title, bodyHTML) {
   $('#modalTitle').textContent = title;
   $('#modalBody').innerHTML = bodyHTML;
   $('#modalOverlay').classList.remove('hidden');
+  if (typeof applyRoleUI === 'function') applyRoleUI(); // pop-ups are read-only for guests
+  applyCardTables();
   modalOpenState = modalFormState();
 }
 function closeModal() { $('#modalOverlay').classList.add('hidden'); }
@@ -194,12 +196,47 @@ const VIEW_KEY = 'urbania-current-view';
 let currentView = 'dashboard';
 // keyboard shortcut per pill: 1–9 and 0 for the first ten, S for Settings
 const TAB_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 's'];
-// left sidebar mirrors the top pills — same items, same switching
-$('#sideNav').innerHTML = $$('#mainTabs .tab')
-  .map((t, i) => `<button class="tab ${t.classList.contains('active') ? 'active' : ''}" data-view="${t.dataset.view}"
-    title="Shortcut: ${(TAB_KEYS[i] || '').toUpperCase()}">${t.innerHTML}${TAB_KEYS[i] ? `<span class="kbd">${TAB_KEYS[i].toUpperCase()}</span>` : ''}</button>`).join('');
+// left sidebar mirrors the top pills — same items, same switching.
+// On a wide screen it is always visible; on a phone it is the slide-in drawer.
+$('#sideNav').innerHTML =
+  `<div class="side-nav-head">
+     <span class="side-nav-title">Menu</span>
+     <button class="icon-btn" id="navCloseBtn" title="Close menu" aria-label="Close menu">✕</button>
+   </div>
+   <div class="side-nav-user" id="drawerUser"></div>` +
+  $$('#mainTabs .tab')
+    .map((t, i) => `<button class="tab ${t.classList.contains('active') ? 'active' : ''}" data-view="${t.dataset.view}"
+      title="Shortcut: ${(TAB_KEYS[i] || '').toUpperCase()}">${t.innerHTML}${TAB_KEYS[i] ? `<span class="kbd">${TAB_KEYS[i].toUpperCase()}</span>` : ''}</button>`).join('') +
+  `<button class="btn ghost side-nav-signout" id="drawerLogout">🚪 Sign Out</button>`;
 $$('#mainTabs .tab').forEach((t, i) => { if (TAB_KEYS[i]) t.title = `Shortcut: ${TAB_KEYS[i].toUpperCase()}`; });
 $$('.tab[data-view]').forEach(tab => tab.addEventListener('click', () => showView(tab.dataset.view)));
+
+// ---------- Slide-in menu (phones / tablets) ----------
+function isDrawerMode() { return window.matchMedia('(max-width: 999px)').matches; }
+function openDrawer() {
+  $('#sideNav').classList.add('open');
+  $('#navBackdrop').classList.remove('hidden');
+  $('#navToggle').setAttribute('aria-expanded', 'true');
+  document.body.classList.add('drawer-open');
+}
+function closeDrawer() {
+  $('#sideNav').classList.remove('open');
+  $('#navBackdrop').classList.add('hidden');
+  $('#navToggle').setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('drawer-open');
+}
+function toggleDrawer() { $('#sideNav').classList.contains('open') ? closeDrawer() : openDrawer(); }
+
+$('#navToggle').addEventListener('click', toggleDrawer);
+$('#drawerLogout').addEventListener('click', () => { closeDrawer(); logout(); });
+$('#navBackdrop').addEventListener('click', closeDrawer);
+$('#navCloseBtn').addEventListener('click', closeDrawer);
+// ESC closes the menu — but let an open pop-up handle ESC first
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#modalOverlay').classList.contains('hidden')) closeDrawer();
+});
+// leaving phone width must not strand the drawer state on the desktop layout
+window.addEventListener('resize', () => { if (!isDrawerMode()) closeDrawer(); });
 
 // press the key anywhere (except while typing or inside a pop-up) to switch pill
 document.addEventListener('keydown', e => {
@@ -216,8 +253,31 @@ function showView(view) {
   localStorage.setItem(VIEW_KEY, view); // survive refresh: reopen on the same tab
   $$('.tab[data-view]').forEach(t => t.classList.toggle('active', t.dataset.view === view));
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+  closeDrawer(); // picking a screen dismisses the slide-in menu
   render();
 }
+/* On a phone a wide table can only be read by scrolling it sideways, so every
+   row is turned into a stacked card with the column name printed beside each
+   value. Done here rather than in each renderer: it reads the header row that
+   is already in the markup, so new tables get the treatment automatically.
+   The card layout itself is CSS — this only supplies the labels. */
+function applyCardTables() {
+  $$('#viewContainer table, #modalBody table').forEach(tbl => {
+    const headRow = tbl.querySelector('thead tr') || tbl.rows[0];
+    if (!headRow) return;
+    const heads = [...headRow.cells].filter(c => c.tagName === 'TH').map(th => th.textContent.trim());
+    if (heads.length < 3) return; // two-column tables already fit a phone
+    tbl.classList.add('as-cards');
+    headRow.classList.add('head-row');
+    [...tbl.rows].forEach(tr => {
+      if (tr === headRow) return;
+      [...tr.cells].forEach((td, i) => {
+        if (heads[i]) td.setAttribute('data-label', heads[i]);
+      });
+    });
+  });
+}
+
 function render() {
   const renderers = {
     dashboard: renderDashboard, trips: renderTrips, drivers: renderDrivers,
@@ -227,6 +287,8 @@ function render() {
   };
   renderers[currentView]();
   updateNotifBadge();
+  applyRoleUI();     // strip write controls when a guest is signed in
+  applyCardTables(); // label table cells so phones can stack them as cards
 }
 
 /* =====================================================
@@ -583,10 +645,14 @@ function gotoTripStep(i) {
     c.classList.toggle('done', idx < tripStep);
   });
   const last = tripStep === steps.length - 1;
-  $('#wBack').classList.toggle('hidden', tripStep === 0);
-  $('#wNext').classList.toggle('hidden', last);
-  $('#wSave').classList.toggle('primary', last);
-  $('#wSave').classList.toggle('ghost', !last);
+  // Save is absent for a guest (read-only view), so every button here is optional
+  const back = $('#wBack'), next = $('#wNext'), save = $('#wSave');
+  if (back) back.classList.toggle('hidden', tripStep === 0);
+  if (next) next.classList.toggle('hidden', last);
+  if (save) {
+    save.classList.toggle('primary', last);
+    save.classList.toggle('ghost', !last);
+  }
   $('#modalBody').scrollTop = 0;
 }
 
@@ -619,6 +685,8 @@ function recalcTripForm() {
 }
 
 function saveTrip(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   if (!f.startDate.value || !f.route.value.trim()) {
@@ -648,6 +716,7 @@ function saveTrip(e, id) {
 }
 
 function deleteTrip(id) {
+  if (!requireEdit()) return;
   const t = db.trips.find(x => x.id === id);
   if (!confirm(`Delete trip ${t.bookingId} (${t.route})? This cannot be undone.`)) return;
   db.trips = db.trips.filter(x => x.id !== id);
@@ -655,6 +724,7 @@ function deleteTrip(id) {
 }
 
 function quickAddClient() {
+  if (!requireEdit()) return;
   const name = prompt('Client name:');
   if (!name) return;
   const mobile = prompt('Mobile number (optional):') || '';
@@ -715,6 +785,8 @@ function openDriverForm(id) {
     </form>`);
 }
 function saveDriver(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   const data = { name: f.name.value.trim(), mobile: f.mobile.value.trim(), license: f.license.value.trim(), licenseExpiry: f.licenseExpiry.value, notes: f.notes.value };
@@ -723,6 +795,7 @@ function saveDriver(e, id) {
   saveDB(); closeModal(); render(); toast('Driver saved ✔');
 }
 function deleteDriver(id) {
+  if (!requireEdit()) return;
   const d = db.drivers.find(x => x.id === id);
   if (!confirm(`Delete driver ${d.name}? Trip records will keep working but show no driver.`)) return;
   db.drivers = db.drivers.filter(x => x.id !== id);
@@ -794,6 +867,8 @@ function openClientForm(id) {
     </form>`);
 }
 function saveClient(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   const data = { name: f.name.value.trim(), mobile: f.mobile.value.trim(), altMobile: f.altMobile.value.trim(), source: resolveSource(f), notes: f.notes.value };
@@ -802,6 +877,7 @@ function saveClient(e, id) {
   saveDB(); closeModal(); render(); toast('Client saved ✔');
 }
 function deleteClient(id) {
+  if (!requireEdit()) return;
   const c = db.clients.find(x => x.id === id);
   if (!confirm(`Delete client ${c.name}?`)) return;
   db.clients = db.clients.filter(x => x.id !== id);
@@ -902,6 +978,8 @@ function openPurchaseForm(id) {
     </form>`);
 }
 function savePurchase(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   const v = db.vehicles.find(x => x.id === id);
@@ -974,6 +1052,8 @@ function vehiclePurchasePanel() {
 }
 
 function saveVehicle(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   const data = {
@@ -987,6 +1067,7 @@ function saveVehicle(e, id) {
   saveDB(); closeModal(); render(); toast('Vehicle saved ✔');
 }
 function deleteVehicle(id) {
+  if (!requireEdit()) return;
   const v = db.vehicles.find(x => x.id === id);
   if (!confirm(`Delete vehicle ${v.number}?`)) return;
   db.vehicles = db.vehicles.filter(x => x.id !== id);
@@ -1113,6 +1194,8 @@ function openInvestmentForm(id) {
     </form>`);
 }
 function saveInvestment(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   const data = { date: f.date.value, partner: f.partner.value, vehicleId: f.vehicleId.value, amount: num(f.amount.value), notes: f.notes.value };
@@ -1144,6 +1227,8 @@ function openAdjustmentForm(id, presetAmount, presetPayer) {
     </form>`);
 }
 function saveAdjustment(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   const data = { kind: 'adjustment', date: f.date.value, partner: f.partner.value, vehicleId: '', amount: num(f.amount.value), notes: f.notes.value };
@@ -1152,6 +1237,7 @@ function saveAdjustment(e, id) {
   saveDB(); closeModal(); render(); toast('Adjustment saved ✔');
 }
 function deleteInvestment(id) {
+  if (!requireEdit()) return;
   if (!confirm('Delete this investment entry?')) return;
   db.investments = db.investments.filter(i => i.id !== id);
   saveDB(); render(); toast('Investment deleted');
@@ -1219,6 +1305,8 @@ function openEmiForm() {
     </form>`);
 }
 function saveEmi(e) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   db.settings.emi = { monthly: num(f.monthly.value), years: num(f.years.value), startDate: f.startDate.value, vehicleId: f.vehicleId.value };
@@ -1278,6 +1366,8 @@ function openExpenseForm(id) {
     </form>`);
 }
 function saveExpense(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   // EMI payments always count as monthly expenses
@@ -1288,6 +1378,7 @@ function saveExpense(e, id) {
   saveDB(); closeModal(); render(); toast('Expense saved ✔');
 }
 function deleteExpense(id) {
+  if (!requireEdit()) return;
   if (!confirm('Delete this expense?')) return;
   db.expenses = db.expenses.filter(x => x.id !== id);
   saveDB(); render(); toast('Expense deleted');
@@ -1712,6 +1803,22 @@ function renderSettings() {
     </div>
 
     <div class="panel">
+      <h3>🔐 Login & Access</h3>
+      <p class="muted">Signed in as <b>${esc(currentUser ? currentUser.name : '—')}</b> — ${canEdit() ? 'full access (add, edit, delete)' : 'view only'}.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Username</th><th>Access</th></tr></thead>
+          <tbody>${users.map(u => `<tr><td>${esc(u.username)}</td>
+            <td>${u.role === 'admin' ? 'Full rights — everything' : 'View rights — read only'}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn primary" onclick="openPasswordForm()">🔑 Change Password</button>
+        <button class="btn ghost" onclick="resetLogins()">↩️ Reset Logins to Default</button>
+      </div>
+    </div>
+
+    <div class="panel">
       <h3>🧪 Demo & Reset</h3>
       <div class="btn-row">
         <button class="btn ghost" onclick="loadSampleData()">Load Sample Data (demo)</button>
@@ -1723,6 +1830,8 @@ function renderSettings() {
 }
 
 function saveSettings(e) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
   e.preventDefault();
   const f = e.target;
   Object.assign(db.settings, {
@@ -1743,6 +1852,7 @@ function backupData() {
   toast('Backup downloaded ✔');
 }
 function restoreData(input) {
+  if (!requireEdit()) return;
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
@@ -1758,6 +1868,7 @@ function restoreData(input) {
   reader.readAsText(file);
 }
 function clearAllData() {
+  if (!requireEdit()) return;
   if (!confirm('Delete ALL trips, drivers, clients, vehicles, expenses and investments? This cannot be undone!')) return;
   if (!confirm('Are you really sure? Consider downloading a backup first.')) return;
   db = defaultDB(); saveDB(); applyTheme(); render(); toast('All data cleared');
@@ -1767,6 +1878,7 @@ function clearAllData() {
    SAMPLE DATA (demo)
    ===================================================== */
 function loadSampleData() {
+  if (!requireEdit()) return;
   if (db.trips.length && !confirm('This adds demo records on top of existing data. Continue?')) return;
   const t = todayStr();
   const d1 = { id: uid(), name: 'Ramesh Pawar', mobile: '9822011111', license: 'MH1220220001111', licenseExpiry: addDays(t, 200), notes: '' };
