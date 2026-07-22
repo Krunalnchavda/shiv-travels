@@ -1384,7 +1384,7 @@ function settlementPanelHTML() {
         <td>${fmtDate(p.date)}</td>
         <td>${esc(payLabel(p.payer))} → ${esc(payLabel(p.payer === 'p2' ? 'p1' : 'p2'))}</td>
         <td class="num">${fmt(p.amount)}</td>
-        <td class="wrap">${esc(p.notes || '')}</td>
+        <td class="wrap">${p.expenseLabel ? `<span class="chip partial">${esc(p.expenseLabel)}</span> ` : ''}${esc(p.notes || '')}</td>
         <td><button class="btn small danger" onclick="deleteSettlement('${p.id}')">🗑️</button></td>
       </tr>`).join('')}
     </table></details>` : '';
@@ -1401,19 +1401,58 @@ function settlementPanelHTML() {
   </div>`;
 }
 
-/* Record a settle-up payment one partner made to the other. The default direction
-   is pre-filled to whoever currently owes, and the amount to the outstanding balance. */
+/* Every expense where one partner owes the other, with the owed amount and who
+   should pay it back — used to offer a "settle one record" choice. */
+function settleableExpenses() {
+  const out = [];
+  (db.expenses || []).forEach(e => {
+    if (e.paidBy !== 'p1' && e.paidBy !== 'p2') return;
+    const A = num(e.amount);
+    if (!A) return;
+    const s1 = e.shareP1 != null ? num(e.shareP1) : num(db.settings.defaultP1);
+    const s2 = e.shareP1 != null ? num(e.shareP2) : num(db.settings.defaultP2);
+    // the payer fronted the whole amount; the other partner owes their share
+    const owed = e.paidBy === 'p1' ? A * s2 / 100 : A * s1 / 100;
+    const payer = e.paidBy === 'p1' ? 'p2' : 'p1'; // whoever owes is the one who pays back
+    if (owed <= 0) return;
+    out.push({ id: e.id, owed: Math.round(owed), payer, label: `${fmtDate(e.date)} • ${e.category}` });
+  });
+  return out;
+}
+
+// pre-fill amount + direction when a specific expense (or "whole balance") is chosen
+function onSettleAgainstChange(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  const f = sel.form;
+  const amt = opt.getAttribute('data-amount');
+  const payer = opt.getAttribute('data-payer');
+  if (amt != null && amt !== '') f.amount.value = amt;
+  if (payer) f.payer.value = payer;
+}
+
+/* Record a settle-up payment one partner made to the other. Two ways to fill it:
+   the whole outstanding balance (lump-sum) or one specific expense (record-wise). */
 function openSettlementForm(id) {
   if (!requireEdit()) return;
   const x = id ? (db.settlements || []).find(p => p.id === id) : {};
   const s = computeSettlement();
   const p1N = db.settings.partner1Name, p2N = db.settings.partner2Name;
-  // if p2 owes p1 (net>0), the natural payment is p2 → p1
-  const defaultPayer = x.payer || (s.net > 0 ? 'p2' : s.net < 0 ? 'p1' : 'p2');
-  const defaultAmount = x.amount != null ? x.amount : Math.abs(Math.round(s.net)) || '';
+  const nameOf = p => p === 'p2' ? p2N : p1N;
+  const lumpPayer = s.net > 0 ? 'p2' : s.net < 0 ? 'p1' : 'p2';
+  const lumpAmount = Math.abs(Math.round(s.net));
+
+  const defaultPayer = x.payer || lumpPayer;
+  const defaultAmount = x.amount != null ? x.amount : (lumpAmount || '');
+  const items = settleableExpenses();
+  const againstOpts = `
+    <option value="" data-amount="${lumpAmount}" data-payer="${lumpPayer}" ${!x.expenseId ? 'selected' : ''}>Whole outstanding balance (lump-sum) — ${fmt(lumpAmount)}</option>
+    ${items.map(it => `<option value="${it.id}" data-amount="${it.owed}" data-payer="${it.payer}" ${x.expenseId === it.id ? 'selected' : ''}>${esc(it.label)} — ${esc(nameOf(it.payer))} owes ${fmt(it.owed)}</option>`).join('')}`;
+
   openModal(id ? 'Edit Payment' : 'Record a Settle-up Payment', `
     <form onsubmit="saveSettlement(event,'${id || ''}')">
       <div class="form-grid">
+        <div class="field full"><label>Settle *</label>
+          <select name="against" onchange="onSettleAgainstChange(this)">${againstOpts}</select></div>
         <div class="field"><label>Date *</label><input type="date" name="date" required value="${esc(x.date || todayStr())}"></div>
         <div class="field"><label>Paid by *</label>
           <select name="payer" required>
@@ -1423,7 +1462,7 @@ function openSettlementForm(id) {
         <div class="field"><label>Amount (₹) *</label><input type="number" step="any" min="0" name="amount" required value="${esc(defaultAmount)}"></div>
         <div class="field full"><label>Notes</label><input name="notes" value="${esc(x.notes || '')}" placeholder="e.g. paid by UPI"></div>
       </div>
-      <p class="muted">This records money one partner actually handed the other to settle up. It reduces the outstanding balance above.</p><br>
+      <p class="muted">Pick <b>Whole outstanding balance</b> for a lump-sum, or a single expense to settle just that record. The amount stays editable for part-payments.</p><br>
       <div class="btn-row"><button class="btn primary">💾 Save</button>
       <button type="button" class="btn ghost" onclick="requestCloseModal()">Cancel</button></div>
     </form>`);
@@ -1432,7 +1471,16 @@ function saveSettlement(e, id) {
   if (e) e.preventDefault();
   if (!requireEdit()) return;
   const f = e.target;
-  const data = { date: f.date.value, payer: f.payer.value === 'p1' ? 'p1' : 'p2', amount: num(f.amount.value), notes: f.notes.value };
+  const expenseId = f.against ? f.against.value : '';
+  const exp = expenseId ? (db.expenses || []).find(x => x.id === expenseId) : null;
+  const data = {
+    date: f.date.value,
+    payer: f.payer.value === 'p1' ? 'p1' : 'p2',
+    amount: num(f.amount.value),
+    expenseId: expenseId || '',
+    expenseLabel: exp ? `${fmtDate(exp.date)} • ${exp.category}` : '',
+    notes: f.notes.value,
+  };
   if (!db.settlements) db.settlements = [];
   if (id) Object.assign(db.settlements.find(p => p.id === id), data);
   else db.settlements.push({ id: uid(), ...data });
