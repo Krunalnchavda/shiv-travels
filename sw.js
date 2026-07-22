@@ -1,6 +1,6 @@
 /* Service worker — lets the installed phone app open and work with no network.
    Bump CACHE when app.js / styles.css / auth.js change so phones pick up the new build. */
-const CACHE = 'shiv-travels-v11';
+const CACHE = 'shiv-travels-v12';
 const ASSETS = [
   './', './index.html', './styles.css', './auth.js', './app.js',
   './firebase-config.js', './sync.js',
