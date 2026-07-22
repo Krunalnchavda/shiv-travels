@@ -24,9 +24,16 @@ import {
   doc, collection, setDoc, deleteDoc, onSnapshot, getDoc, writeBatch,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-/* ---------- which dataset am I allowed to touch? ---------- */
+/* ---------- read target vs. write permission ----------
+   Local (localhost or opened off the disk) runs as a live MIRROR of production:
+   it READS envs/prod, so you always see the real business data, but every write
+   stays inside this browser and is never sent to the cloud. That means you can
+   add / edit / delete freely on your laptop and production can never change.
+   Only the real deployed site both reads and writes envs/prod. */
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1', ''];
-const ENV = (LOCAL_HOSTS.includes(location.hostname) || location.protocol === 'file:') ? 'dev' : 'prod';
+const IS_LOCAL = LOCAL_HOSTS.includes(location.hostname) || location.protocol === 'file:';
+const ENV = 'prod';               // both local and live read production data
+const WRITE_TO_CLOUD = !IS_LOCAL; // only the deployed site is allowed to write back
 
 /* record collections mirror the arrays on `db`; settings and seq are single docs */
 const COLLECTIONS = ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments'];
@@ -34,8 +41,26 @@ const COLLECTIONS = ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'inv
 const cfg = window.FIREBASE_CONFIG || {};
 const CONFIGURED = !!(cfg.apiKey && cfg.projectId);
 
+/* Whatever this browser held before it ever talked to the cloud, kept under its
+   own key. The first snapshot from an empty cloud legitimately empties db and
+   the normal cache with it, so without this copy a device's records would be
+   unrecoverable the moment it signed in. Written once and never overwritten. */
+const PRESYNC_KEY = 'urbania-partner-db-v1-presync';
+function keepPreSyncCopy() {
+  try {
+    if (localStorage.getItem(PRESYNC_KEY)) return;
+    const raw = localStorage.getItem('urbania-partner-db-v1');
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    const count = ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments']
+      .reduce((n, k) => n + ((parsed || {})[k] || []).length, 0);
+    if (count) localStorage.setItem(PRESYNC_KEY, raw);
+  } catch (e) { /* best effort */ }
+}
+
 const Sync = {
   env: ENV,
+  mirror: IS_LOCAL,   // true on localhost/off-disk: reads prod, writes stay local only
   configured: CONFIGURED,
   active: false,      // true once signed in and listening
   ready: false,       // true once the first full snapshot has arrived
@@ -127,6 +152,7 @@ function stopListening() {
    through, so no individual save function needed changing.
    ===================================================== */
 Sync.push = async function push() {
+  if (!WRITE_TO_CLOUD) return; // local mirror — every edit stays in this browser, never the cloud
   if (!Sync.active || !Sync.ready) return;
   const prev = Sync._last || { settings: {}, seq: {} };
   const next = snapshotOf(db);
@@ -240,10 +266,22 @@ Sync.isEmpty = function () {
   return COLLECTIONS.every(c => !(db[c] || []).length);
 };
 
+// what this browser held before it first synced — the source for a manual upload
+Sync.preSyncData = function () {
+  try { return JSON.parse(localStorage.getItem(PRESYNC_KEY)); } catch (e) { return null; }
+};
+Sync.preSyncCount = function () {
+  const d = Sync.preSyncData();
+  return d ? COLLECTIONS.reduce((n, c) => n + ((d[c] || []).length), 0) : 0;
+};
+
 /* =====================================================
    BOOT
    ===================================================== */
 async function boot() {
+  // must happen before any listener can replace db with the cloud's version
+  if (CONFIGURED) keepPreSyncCopy();
+
   if (!CONFIGURED) {
     // no cloud configured — run exactly as before, on this browser only
     setStatus('local');

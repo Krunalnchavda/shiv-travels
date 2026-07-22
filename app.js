@@ -213,7 +213,7 @@ $('#sideNav').innerHTML =
    <div class="side-nav-user" id="drawerUser"></div>` +
   $$('#mainTabs .tab')
     .map((t, i) => `<button class="tab ${t.classList.contains('active') ? 'active' : ''}" data-view="${t.dataset.view}"
-      title="Shortcut: ${(TAB_KEYS[i] || '').toUpperCase()}">${t.innerHTML}${TAB_KEYS[i] ? `<span class="kbd">${TAB_KEYS[i].toUpperCase()}</span>` : ''}</button>`).join('') +
+      title="Shortcut: ${(TAB_KEYS[i] || '').toUpperCase()}">${t.innerHTML}</button>`).join('') +
   `<button class="btn ghost side-nav-signout" id="drawerLogout">🚪 Sign Out</button>`;
 $$('#mainTabs .tab').forEach((t, i) => { if (TAB_KEYS[i]) t.title = `Shortcut: ${TAB_KEYS[i].toUpperCase()}`; });
 $$('.tab[data-view]').forEach(tab => tab.addEventListener('click', () => showView(tab.dataset.view)));
@@ -1320,6 +1320,56 @@ function saveEmi(e) {
   saveDB(); closeModal(); render(); toast('EMI plan saved ✔');
 }
 
+/* Partner settlement — who fronted the cash vs. their agreed share of the cost.
+   Only expenses that record a "Paid by" partner are counted; a missing share
+   falls back to the Settings default split. Works across one-time and monthly
+   expenses alike, because it is about real money paid, not profit accounting. */
+function computeSettlement(expenses) {
+  let paidP1 = 0, paidP2 = 0, oweP1 = 0, oweP2 = 0, skipped = 0, counted = 0;
+  (expenses || db.expenses).forEach(e => {
+    const A = num(e.amount);
+    if (!A) return;
+    if (e.paidBy !== 'p1' && e.paidBy !== 'p2') { skipped++; return; }
+    const s1 = e.shareP1 != null ? num(e.shareP1) : num(db.settings.defaultP1);
+    const s2 = e.shareP1 != null ? num(e.shareP2) : num(db.settings.defaultP2);
+    oweP1 += A * s1 / 100;
+    oweP2 += A * s2 / 100;
+    if (e.paidBy === 'p2') paidP2 += A; else paidP1 += A;
+    counted++;
+  });
+  // net > 0  → partner 2 owes partner 1 ;  net < 0  → partner 1 owes partner 2
+  return { paidP1, paidP2, oweP1, oweP2, net: paidP1 - oweP1, skipped, counted };
+}
+
+function settlementPanelHTML() {
+  const s = computeSettlement();
+  const p1N = db.settings.partner1Name, p2N = db.settings.partner2Name;
+  const head = `<h3>🤝 Partner Settlement <span class="muted">(who owes whom, across all expenses)</span></h3>`;
+
+  // no expense has a "Paid by" yet — show the panel anyway, so the feature is findable
+  if (!s.counted) {
+    return `<div class="panel">${head}
+      <p class="muted">Nothing to settle yet. Add an expense (or edit an existing one) and set <b>Paid by</b> plus the <b>Share %</b> — the balance between ${esc(p1N)} and ${esc(p2N)} will appear here.
+      ${s.skipped ? `<br>⚠️ ${s.skipped} existing expense(s) have no “Paid by” set.` : ''}</p>
+    </div>`;
+  }
+
+  const net = Math.round(s.net);
+  const line = net === 0
+    ? `<span class="pos">✅ All settled — nobody owes anything.</span>`
+    : net > 0
+      ? `<b>${esc(p2N)}</b> owes <b>${esc(p1N)}</b> <b class="pos">${fmt(net)}</b>`
+      : `<b>${esc(p1N)}</b> owes <b>${esc(p2N)}</b> <b class="pos">${fmt(-net)}</b>`;
+  return `<div class="panel">${head}
+    <div class="settle-grid">
+      <div><div class="muted">${esc(p1N)} paid</div><b>${fmt(Math.round(s.paidP1))}</b><div class="muted">fair share ${fmt(Math.round(s.oweP1))}</div></div>
+      <div><div class="muted">${esc(p2N)} paid</div><b>${fmt(Math.round(s.paidP2))}</b><div class="muted">fair share ${fmt(Math.round(s.oweP2))}</div></div>
+    </div>
+    <div class="settle-result">${line}</div>
+    ${s.skipped ? `<p class="muted">⚠️ ${s.skipped} expense(s) not counted — no “Paid by” set. Edit them to include in settlement.</p>` : ''}
+  </div>`;
+}
+
 function renderExpenses() {
   const el = $('#view-expenses');
   let list = [...db.expenses].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -1334,16 +1384,20 @@ function renderExpenses() {
     <div class="view-header"><h2>Expenses <span class="muted">(vehicle & business — trip expenses are inside each trip)</span></h2>
       <button class="btn primary" onclick="openExpenseForm()">＋ Add Expense</button></div>
     ${emiPanelHTML()}
+    ${settlementPanelHTML()}
     <div class="filter-row">
       <input type="month" value="${expMonthFilter}" onchange="expMonthFilter=this.value; renderExpenses()">
       ${expMonthFilter ? `<button class="btn small ghost" onclick="expMonthFilter=''; renderExpenses()">Clear</button>` : ''}
       <span class="muted">One-time: <b>${fmt(oneTotal)}</b> · Monthly: <b>${fmt(monTotal)}</b></span>
     </div>
     ${list.length ? `<div class="panel table-wrap"><table>
-      <tr><th>Date</th><th>Type</th><th>Category</th><th>Vehicle</th><th class="num">Amount</th><th class="wrap">Notes</th><th>Actions</th></tr>
+      <tr><th>Date</th><th>Type</th><th>Category</th><th>Vehicle</th><th class="num">Amount</th><th>Paid by</th><th>Share</th><th class="wrap">Notes</th><th>Actions</th></tr>
       ${list.map(x => `<tr>
         <td>${fmtDate(x.date)}</td><td>${typeChip(x)}</td><td>${esc(x.category)}</td><td>${esc(vehicleNo(x.vehicleId))}</td>
-        <td class="num neg">${fmt(x.amount)}</td><td class="wrap">${esc(x.notes || '')}</td>
+        <td class="num neg">${fmt(x.amount)}</td>
+        <td>${x.paidBy ? esc(partnerLabel(x.paidBy)) : '—'}</td>
+        <td>${x.shareP1 != null ? `${num(x.shareP1)}/${num(x.shareP2)}` : '—'}</td>
+        <td class="wrap">${esc(x.notes || '')}</td>
         <td><button class="btn small" onclick="openExpenseForm('${x.id}')">✏️</button>
         <button class="btn small danger" onclick="deleteExpense('${x.id}')">🗑️</button></td></tr>`).join('')}
     </table></div>
@@ -1366,8 +1420,20 @@ function openExpenseForm(id) {
           <select name="category" required onchange="if(this.value==='EMI')this.form.type.value='monthly'">${GEN_EXP_CATEGORIES.map(c => `<option ${(x.category || '') === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
         <div class="field"><label>Vehicle</label><select name="vehicleId">${selectOptions(db.vehicles, 'id', v => v.number, x.vehicleId)}</select></div>
         <div class="field"><label>Amount (₹) *</label><input type="number" step="any" min="0" name="amount" required value="${esc(x.amount || '')}"></div>
+        <div class="field"><label>Paid by *</label>
+          <select name="paidBy" required>
+            <option value="p1" ${(x.paidBy || 'p1') === 'p1' ? 'selected' : ''}>${esc(db.settings.partner1Name)}</option>
+            <option value="p2" ${x.paidBy === 'p2' ? 'selected' : ''}>${esc(db.settings.partner2Name)}</option>
+          </select></div>
+        <div class="field"><label>${esc(db.settings.partner1Name)} Share %</label>
+          <input type="number" step="any" min="0" max="100" name="shareP1" value="${esc(x.shareP1 != null ? x.shareP1 : db.settings.defaultP1)}"
+            oninput="this.form.shareP2.value = Math.max(0, 100 - (parseFloat(this.value) || 0))"></div>
+        <div class="field"><label>${esc(db.settings.partner2Name)} Share %</label>
+          <input type="number" step="any" min="0" max="100" name="shareP2" value="${esc(x.shareP2 != null ? x.shareP2 : db.settings.defaultP2)}"
+            oninput="this.form.shareP1.value = Math.max(0, 100 - (parseFloat(this.value) || 0))"></div>
         <div class="field full"><label>Notes</label><input name="notes" value="${esc(x.notes || '')}"></div>
-      </div><br>
+      </div>
+      <p class="muted">“Paid by” is who actually spent the money. The share % is how this cost is divided between the two of you (defaults come from Settings).</p><br>
       <div class="btn-row"><button class="btn primary">💾 Save</button>
       <button type="button" class="btn ghost" onclick="requestCloseModal()">Cancel</button></div>
     </form>`);
@@ -1379,7 +1445,8 @@ function saveExpense(e, id) {
   const f = e.target;
   // EMI payments always count as monthly expenses
   const type = f.category.value === 'EMI' ? 'monthly' : f.type.value;
-  const data = { date: f.date.value, type, category: f.category.value, vehicleId: f.vehicleId.value, amount: num(f.amount.value), notes: f.notes.value };
+  const data = { date: f.date.value, type, category: f.category.value, vehicleId: f.vehicleId.value, amount: num(f.amount.value),
+    paidBy: f.paidBy.value === 'p2' ? 'p2' : 'p1', shareP1: num(f.shareP1.value), shareP2: num(f.shareP2.value), notes: f.notes.value };
   if (id) Object.assign(db.expenses.find(x => x.id === id), data);
   else db.expenses.push({ id: uid(), ...data });
   saveDB(); closeModal(); render(); toast('Expense saved ✔');
@@ -1416,8 +1483,11 @@ function renderProfit() {
     if (!k) return;
     const m = monthOf(k);
     m.genExp += num(e.amount);
-    m.p1 -= num(e.amount) * num(db.settings.defaultP1) / 100;
-    m.p2 -= num(e.amount) * num(db.settings.defaultP2) / 100;
+    // each expense carries its own split; older ones fall back to the Settings default
+    const s1 = e.shareP1 != null ? num(e.shareP1) : num(db.settings.defaultP1);
+    const s2 = e.shareP1 != null ? num(e.shareP2) : num(db.settings.defaultP2);
+    m.p1 -= num(e.amount) * s1 / 100;
+    m.p2 -= num(e.amount) * s2 / 100;
   });
 
   const months = Object.entries(byMonth).sort((a, b) => b[0].localeCompare(a[0]));
@@ -1450,7 +1520,7 @@ function renderProfit() {
         <th class="num ${cls(tot.p2)}">${fmt(Math.round(tot.p2))}</th></tr>` : ''}
     </table></div>
     <p class="muted">Net Profit = trip income − trip expenses − monthly (running) expenses. Trip profit is split by each trip's own %;
-    monthly expenses (EMI, service…) are split ${num(db.settings.defaultP1)}/${num(db.settings.defaultP2)} per Settings. One-time (setup) expenses and vehicle purchase are not included.</p>`
+    monthly expenses (EMI, service…) are split by each expense's own share ratio (default ${num(db.settings.defaultP1)}/${num(db.settings.defaultP2)} from Settings). One-time (setup) expenses and vehicle purchase are not included.</p>`
     : `<div class="panel empty-state"><div class="big">💹</div>No trips or monthly expenses yet.</div>`}`;
 }
 
@@ -1800,6 +1870,26 @@ function renderSettings() {
       </form>
     </div>
 
+    ${window.Sync && Sync.configured ? `
+    <div class="panel">
+      <h3>☁️ Cloud Sync</h3>
+      <p class="muted">
+        Dataset: <b>${Sync.mirror ? 'Local mirror of production (cloud is read-only from here)' : 'Live production'}</b> ·
+        Status: <b>${esc(Sync.status)}</b>${Sync.error ? ` · <span class="neg">${esc(Sync.error)}</span>` : ''}<br>
+        Signed in as <b>${esc(currentUser ? currentUser.username : '—')}</b> with
+        <b>${canEdit() ? 'full access' : 'view-only access'}</b>.
+      </p>
+      <p class="muted">Records loaded right now: ${['trips','drivers','clients','vehicles','expenses','investments'].map(c => `${(db[c] || []).length} ${c}`).join(' · ')}</p>
+      ${Sync.mirror ? `
+      <p class="muted">🛡️ This is a live <b>mirror</b> of production. You can add, edit and delete anything here to test — none of it is ever sent to the cloud, and your live business data stays safe. Reload the page to pull a fresh copy of production.</p>
+      ` : `
+      <div class="btn-row">
+        <button class="btn primary" onclick="pushDeviceDataToCloud()">⬆️ Upload This Device's Data to Cloud</button>
+      </div>
+      <p class="muted">Use this if the cloud is empty but this browser still holds your records. It adds and updates — it never deletes anything already in the cloud.</p>
+      `}
+    </div>` : ''}
+
     <div class="panel">
       <h3>💾 Backup & Restore</h3>
       <p class="muted">Your data lives only in this browser. Take a backup regularly — you can restore it on any device (e.g. your phone).</p>
@@ -1852,6 +1942,32 @@ function saveSettings(e) {
     defaultP2: num(f.defaultP2.value),
   });
   saveDB(); toast('Settings saved ✔');
+}
+
+/* Manual "get this device's records into the cloud". Prefers the pre-sync copy,
+   because signing in against an empty cloud legitimately blanks the live one. */
+async function pushDeviceDataToCloud() {
+  if (!requireEdit()) return;
+  if (window.Sync && Sync.mirror) { alert('This is the local mirror of production — uploads are turned off so nothing here can ever change your live data.'); return; }
+  if (!(window.Sync && Sync.configured && Sync.active)) { alert('Not connected to the cloud yet.'); return; }
+
+  const source = Sync.preSyncData() || db;
+  const counts = ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments']
+    .map(c => [(source[c] || []).length, c]).filter(([n]) => n);
+  const total = counts.reduce((n, [c]) => n + c, 0);
+  if (!total) { alert('This device has no records to upload.'); return; }
+
+  if (!confirm(`Upload to the ${Sync.env === 'dev' ? 'TEST' : 'live'} cloud:\n\n`
+    + counts.map(([n, c]) => `  ${n} ${c}`).join('\n')
+    + '\n\nExisting cloud records with the same id are updated. Nothing is deleted.')) return;
+
+  try {
+    await Sync.uploadLocalData(source);
+    toast(`Uploaded ${total} records ✔`);
+  } catch (ex) {
+    alert('Upload failed: ' + (ex.code === 'permission-denied'
+      ? 'this account does not have write access.' : ex.message));
+  }
 }
 
 function backupData() {
@@ -1952,8 +2068,8 @@ function updateSyncBadge() {
     error:        ['⚠️', 'Sync problem: ' + (s.error || 'unknown'), 'bad'],
   }[s.status] || ['', '', 'ok'];
 
-  el.textContent = look[0] + (s.env === 'dev' && s.status !== 'local' ? ' TEST' : '');
-  el.title = look[1] + (s.env === 'dev' ? ' · TEST database (localhost) — real data is untouched' : '');
+  el.textContent = look[0] + (s.mirror && s.status !== 'local' ? ' MIRROR' : '');
+  el.title = look[1] + (s.mirror ? ' · Local mirror — reads live production, your edits stay on this device and never reach production' : '');
   el.className = 'sync-badge ' + look[2];
   el.classList.toggle('hidden', !look[0]);
 }

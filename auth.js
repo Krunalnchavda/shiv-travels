@@ -187,17 +187,18 @@ function onCloudSignedOut() {
 let uploadOffered = false;
 async function maybeOfferUpload() {
   if (uploadOffered || !cloudMode() || !canEdit()) return;
+  if (window.Sync && Sync.mirror) return; // local mirror never writes to the cloud
   uploadOffered = true;
   // wait for the first full snapshot so "is the cloud empty?" is a real answer
   const started = Date.now();
   while (!Sync.ready && Date.now() - started < 8000) await new Promise(r => setTimeout(r, 200));
   if (!Sync.ready || !Sync.isEmpty()) return;
 
-  let local;
-  try { local = JSON.parse(localStorage.getItem(DB_KEY)); } catch (e) { return; }
-  const count = local ? ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments']
-    .reduce((n, k) => n + (local[k] || []).length, 0) : 0;
-  if (!count) return;
+  // read the pre-sync copy: the live cache has already been replaced by the
+  // (empty) cloud state by the time this runs
+  const local = Sync.preSyncData();
+  const count = Sync.preSyncCount();
+  if (!local || !count) return;
 
   if (!confirm(`The ${Sync.env === 'dev' ? 'TEST' : 'shared'} database is empty, but this browser has ${count} records.\n\nUpload them now so your other devices can see them?`)) return;
   try {
