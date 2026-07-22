@@ -36,7 +36,7 @@ const ENV = 'prod';               // both local and live read production data
 const WRITE_TO_CLOUD = !IS_LOCAL; // only the deployed site is allowed to write back
 
 /* record collections mirror the arrays on `db`; settings and seq are single docs */
-const COLLECTIONS = ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments'];
+const COLLECTIONS = ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments', 'settlements'];
 
 const cfg = window.FIREBASE_CONFIG || {};
 const CONFIGURED = !!(cfg.apiKey && cfg.projectId);
@@ -52,7 +52,7 @@ function keepPreSyncCopy() {
     const raw = localStorage.getItem('urbania-partner-db-v1');
     if (!raw) return;
     const parsed = JSON.parse(raw);
-    const count = ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments']
+    const count = ['trips', 'drivers', 'clients', 'vehicles', 'expenses', 'investments', 'settlements']
       .reduce((n, k) => n + ((parsed || {})[k] || []).length, 0);
     if (count) localStorage.setItem(PRESYNC_KEY, raw);
   } catch (e) { /* best effort */ }

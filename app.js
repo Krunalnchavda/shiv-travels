@@ -26,6 +26,7 @@ const defaultDB = () => ({
   vehicles: [],
   expenses: [], // general (non-trip) expenses
   investments: [], // partner capital contributions
+  settlements: [], // settle-up payments one partner made to the other
   seq: { booking: 0 },
 });
 
@@ -1337,20 +1338,32 @@ function computeSettlement(expenses) {
     if (e.paidBy === 'p2') paidP2 += A; else paidP1 += A;
     counted++;
   });
-  // net > 0  → partner 2 owes partner 1 ;  net < 0  → partner 1 owes partner 2
-  return { paidP1, paidP2, oweP1, oweP2, net: paidP1 - oweP1, skipped, counted };
+  // settle-up payments already made between the partners cancel out the debt
+  let paidBackToP1 = 0, paidBackToP2 = 0; // p2→p1 and p1→p2
+  (db.settlements || []).forEach(s => {
+    const A = num(s.amount);
+    if (!A) return;
+    if (s.payer === 'p2') paidBackToP1 += A; else paidBackToP2 += A;
+  });
+  // expenseNet > 0 → p2 owes p1. A p2→p1 payment shrinks that; a p1→p2 payment grows it.
+  const expenseNet = paidP1 - oweP1;
+  const net = expenseNet - paidBackToP1 + paidBackToP2;
+  return { paidP1, paidP2, oweP1, oweP2, expenseNet, net, skipped, counted,
+    settledCount: (db.settlements || []).length, paidBackToP1, paidBackToP2 };
 }
 
 function settlementPanelHTML() {
   const s = computeSettlement();
   const p1N = db.settings.partner1Name, p2N = db.settings.partner2Name;
   const head = `<h3>🤝 Partner Settlement <span class="muted">(who owes whom, across all expenses)</span></h3>`;
+  const payBtn = `<button class="btn small" onclick="openSettlementForm()">＋ Record a Payment</button>`;
 
-  // no expense has a "Paid by" yet — show the panel anyway, so the feature is findable
-  if (!s.counted) {
+  // no expense has a "Paid by" yet and no payments logged — still show the panel so it is findable
+  if (!s.counted && !s.settledCount) {
     return `<div class="panel">${head}
       <p class="muted">Nothing to settle yet. Add an expense (or edit an existing one) and set <b>Paid by</b> plus the <b>Share %</b> — the balance between ${esc(p1N)} and ${esc(p2N)} will appear here.
       ${s.skipped ? `<br>⚠️ ${s.skipped} existing expense(s) have no “Paid by” set.` : ''}</p>
+      <div class="btn-row">${payBtn}</div>
     </div>`;
   }
 
@@ -1360,14 +1373,76 @@ function settlementPanelHTML() {
     : net > 0
       ? `<b>${esc(p2N)}</b> owes <b>${esc(p1N)}</b> <b class="pos">${fmt(net)}</b>`
       : `<b>${esc(p1N)}</b> owes <b>${esc(p2N)}</b> <b class="pos">${fmt(-net)}</b>`;
+
+  // settle-up payment history, newest first
+  const pays = [...(db.settlements || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const payLabel = p => p === 'p2' ? p2N : p1N;
+  const historyHTML = pays.length ? `
+    <details class="settle-history"><summary class="muted">Settle-up payments (${pays.length}) — total ${fmt(Math.round(s.paidBackToP1 + s.paidBackToP2))}</summary>
+    <table class="mini-table">
+      ${pays.map(p => `<tr>
+        <td>${fmtDate(p.date)}</td>
+        <td>${esc(payLabel(p.payer))} → ${esc(payLabel(p.payer === 'p2' ? 'p1' : 'p2'))}</td>
+        <td class="num">${fmt(p.amount)}</td>
+        <td class="wrap">${esc(p.notes || '')}</td>
+        <td><button class="btn small danger" onclick="deleteSettlement('${p.id}')">🗑️</button></td>
+      </tr>`).join('')}
+    </table></details>` : '';
+
   return `<div class="panel">${head}
     <div class="settle-grid">
       <div><div class="muted">${esc(p1N)} paid</div><b>${fmt(Math.round(s.paidP1))}</b><div class="muted">fair share ${fmt(Math.round(s.oweP1))}</div></div>
       <div><div class="muted">${esc(p2N)} paid</div><b>${fmt(Math.round(s.paidP2))}</b><div class="muted">fair share ${fmt(Math.round(s.oweP2))}</div></div>
     </div>
     <div class="settle-result">${line}</div>
+    <div class="btn-row">${payBtn}</div>
+    ${historyHTML}
     ${s.skipped ? `<p class="muted">⚠️ ${s.skipped} expense(s) not counted — no “Paid by” set. Edit them to include in settlement.</p>` : ''}
   </div>`;
+}
+
+/* Record a settle-up payment one partner made to the other. The default direction
+   is pre-filled to whoever currently owes, and the amount to the outstanding balance. */
+function openSettlementForm(id) {
+  if (!requireEdit()) return;
+  const x = id ? (db.settlements || []).find(p => p.id === id) : {};
+  const s = computeSettlement();
+  const p1N = db.settings.partner1Name, p2N = db.settings.partner2Name;
+  // if p2 owes p1 (net>0), the natural payment is p2 → p1
+  const defaultPayer = x.payer || (s.net > 0 ? 'p2' : s.net < 0 ? 'p1' : 'p2');
+  const defaultAmount = x.amount != null ? x.amount : Math.abs(Math.round(s.net)) || '';
+  openModal(id ? 'Edit Payment' : 'Record a Settle-up Payment', `
+    <form onsubmit="saveSettlement(event,'${id || ''}')">
+      <div class="form-grid">
+        <div class="field"><label>Date *</label><input type="date" name="date" required value="${esc(x.date || todayStr())}"></div>
+        <div class="field"><label>Paid by *</label>
+          <select name="payer" required>
+            <option value="p2" ${defaultPayer === 'p2' ? 'selected' : ''}>${esc(p2N)} → ${esc(p1N)}</option>
+            <option value="p1" ${defaultPayer === 'p1' ? 'selected' : ''}>${esc(p1N)} → ${esc(p2N)}</option>
+          </select></div>
+        <div class="field"><label>Amount (₹) *</label><input type="number" step="any" min="0" name="amount" required value="${esc(defaultAmount)}"></div>
+        <div class="field full"><label>Notes</label><input name="notes" value="${esc(x.notes || '')}" placeholder="e.g. paid by UPI"></div>
+      </div>
+      <p class="muted">This records money one partner actually handed the other to settle up. It reduces the outstanding balance above.</p><br>
+      <div class="btn-row"><button class="btn primary">💾 Save</button>
+      <button type="button" class="btn ghost" onclick="requestCloseModal()">Cancel</button></div>
+    </form>`);
+}
+function saveSettlement(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
+  const f = e.target;
+  const data = { date: f.date.value, payer: f.payer.value === 'p1' ? 'p1' : 'p2', amount: num(f.amount.value), notes: f.notes.value };
+  if (!db.settlements) db.settlements = [];
+  if (id) Object.assign(db.settlements.find(p => p.id === id), data);
+  else db.settlements.push({ id: uid(), ...data });
+  saveDB(); closeModal(); render(); toast('Payment recorded ✔');
+}
+function deleteSettlement(id) {
+  if (!requireEdit()) return;
+  if (!confirm('Delete this settle-up payment?')) return;
+  db.settlements = (db.settlements || []).filter(p => p.id !== id);
+  saveDB(); render(); toast('Payment deleted');
 }
 
 function renderExpenses() {
