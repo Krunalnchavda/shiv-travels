@@ -203,7 +203,7 @@ $('#themeBtn').addEventListener('click', () => {
 const VIEW_KEY = 'urbania-current-view';
 let currentView = 'dashboard';
 // keyboard shortcut per pill: 1–9 and 0 for the first ten, S for Settings
-const TAB_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 's'];
+const TAB_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'r', 's'];
 // left sidebar mirrors the top pills — same items, same switching.
 // On a wide screen it is always visible; on a phone it is the slide-in drawer.
 $('#sideNav').innerHTML =
@@ -290,7 +290,7 @@ function render() {
   const renderers = {
     dashboard: renderDashboard, trips: renderTrips, drivers: renderDrivers,
     clients: renderClients, vehicles: renderVehicles, purchase: renderPurchase,
-    investments: renderInvestments, expenses: renderExpenses,
+    investments: renderInvestments, expenses: renderExpenses, emi: renderEmi,
     profit: renderProfit, reports: renderReports, settings: renderSettings,
   };
   renderers[currentView]();
@@ -1254,7 +1254,7 @@ function deleteInvestment(id) {
 /* =====================================================
    GENERAL EXPENSES
    ===================================================== */
-const GEN_EXP_CATEGORIES = ['Fuel', 'Maintenance', 'Insurance', 'Service', 'Tyres', 'FASTag Recharge', 'EMI', 'Cleaning', 'Other'];
+const GEN_EXP_CATEGORIES = ['Fuel', 'Maintenance', 'Insurance', 'Service', 'Tyres', 'FASTag Recharge', 'Cleaning', 'Other'];
 let expMonthFilter = thisMonth(); // default to current month
 
 // EMI plan summary — paid / remaining / tenure left / next due, all derived
@@ -1295,7 +1295,7 @@ function emiPanelHTML() {
     <div class="progress" title="${pct}% paid"><i style="width:${pct}%"></i></div>
     <div class="muted" style="margin-top:4px">${pct}% paid · ${fmt(paidAmt)} of ${fmt(total)}</div>
     <br><button class="btn small ghost" onclick="openEmiForm()">⚙️ Edit EMI Plan</button>
-    <span class="muted"> Record each month's payment as an expense with category "EMI" — it counts in monthly expenses.</span></div>`;
+    <span class="muted"> Use ＋ Add EMI Payment for each month's instalment — it counts in monthly expenses and profit.</span></div>`;
 }
 
 function openEmiForm() {
@@ -1321,6 +1321,59 @@ function saveEmi(e) {
   saveDB(); closeModal(); render(); toast('EMI plan saved ✔');
 }
 
+/* =====================================================
+   EMI (own tab) — the vehicle loan. Each instalment is stored as a monthly
+   expense with category "EMI": it flows into monthly expenses and profit
+   (split by the Settings ratio) but is never part of the partner settlement,
+   because the bank is paid, not a partner.
+   ===================================================== */
+function renderEmi() {
+  const el = $('#view-emi');
+  const list = [...db.expenses].filter(e => e.category === 'EMI').sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const total = list.reduce((s, e) => s + num(e.amount), 0);
+  el.innerHTML = `
+    <div class="view-header"><h2>Vehicle EMI <span class="muted">(loan instalments — auto-counted in monthly expenses & profit)</span></h2>
+      <button class="btn primary" onclick="openEmiPaymentForm()">＋ Add EMI Payment</button></div>
+    ${emiPanelHTML()}
+    ${list.length ? `<div class="panel table-wrap"><table>
+      <tr><th>Date</th><th>Vehicle</th><th class="num">Amount</th><th class="wrap">Notes</th><th>Actions</th></tr>
+      ${list.map(x => `<tr>
+        <td>${fmtDate(x.date)}</td><td>${esc(vehicleNo(x.vehicleId))}</td>
+        <td class="num neg">${fmt(x.amount)}</td><td class="wrap">${esc(x.notes || '')}</td>
+        <td><button class="btn small" onclick="openEmiPaymentForm('${x.id}')">✏️</button>
+        <button class="btn small danger" onclick="deleteExpense('${x.id}')">🗑️</button></td></tr>`).join('')}
+      <tr><th colspan="2">Total paid</th><th class="num">${fmt(total)}</th><th colspan="2"></th></tr>
+    </table></div>
+    <p class="muted">Each EMI payment counts as a monthly expense and is split ${num(db.settings.defaultP1)}/${num(db.settings.defaultP2)} in Profit. It is not part of the partner settlement.</p>`
+      : `<div class="panel empty-state"><div class="big">🏦</div>No EMI payments recorded yet. Use ＋ Add EMI Payment each month.</div>`}`;
+}
+
+function openEmiPaymentForm(id) {
+  const x = id ? db.expenses.find(e => e.id === id) : {};
+  const emi = db.settings.emi || {};
+  openModal(id ? 'Edit EMI Payment' : 'Add EMI Payment', `
+    <form onsubmit="saveEmiPayment(event,'${id || ''}')">
+      <div class="form-grid">
+        <div class="field"><label>Date *</label><input type="date" name="date" required value="${esc(x.date || todayStr())}"></div>
+        <div class="field"><label>Amount (₹) *</label><input type="number" step="any" min="0" name="amount" required value="${esc(x.amount != null ? x.amount : (emi.monthly || ''))}"></div>
+        <div class="field"><label>Vehicle</label><select name="vehicleId">${selectOptions(db.vehicles, 'id', v => v.number, x.vehicleId != null ? x.vehicleId : emi.vehicleId)}</select></div>
+        <div class="field full"><label>Notes</label><input name="notes" value="${esc(x.notes || '')}" placeholder="e.g. July instalment"></div>
+      </div>
+      <p class="muted">Recorded as a monthly EMI expense — counts in monthly expenses and profit (split per your Settings ratio). No “Paid by”, and not in the partner settlement.</p><br>
+      <div class="btn-row"><button class="btn primary">💾 Save</button>
+      <button type="button" class="btn ghost" onclick="requestCloseModal()">Cancel</button></div>
+    </form>`);
+}
+function saveEmiPayment(e, id) {
+  if (e) e.preventDefault();
+  if (!requireEdit()) return;
+  const f = e.target;
+  const data = { date: f.date.value, type: 'monthly', category: 'EMI', vehicleId: f.vehicleId.value, amount: num(f.amount.value), notes: f.notes.value };
+  if (id) Object.assign(db.expenses.find(x => x.id === id), data);
+  else db.expenses.push({ id: uid(), ...data });
+  saveDB(); closeModal(); render(); toast('EMI payment saved ✔');
+}
+
 /* Partner settlement — who fronted the cash vs. their agreed share of the cost.
    Only expenses that record a "Paid by" partner are counted; a missing share
    falls back to the Settings default split. Works across one-time and monthly
@@ -1330,6 +1383,7 @@ function computeSettlement(expenses) {
   (expenses || db.expenses).forEach(e => {
     const A = num(e.amount);
     if (!A) return;
+    if (e.category === 'EMI') return; // EMI is a bank loan, not paid by a partner — never in settlement
     if (e.paidBy !== 'p1' && e.paidBy !== 'p2') { skipped++; return; }
     const s1 = e.shareP1 != null ? num(e.shareP1) : num(db.settings.defaultP1);
     const s2 = e.shareP1 != null ? num(e.shareP2) : num(db.settings.defaultP2);
@@ -1495,7 +1549,8 @@ function deleteSettlement(id) {
 
 function renderExpenses() {
   const el = $('#view-expenses');
-  let list = [...db.expenses].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  // EMI has its own tab now — keep it out of the general expenses list
+  let list = [...db.expenses].filter(e => e.category !== 'EMI').sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   if (expMonthFilter) list = list.filter(e => monthKey(e.date) === expMonthFilter);
   const oneTotal = list.filter(e => e.type === 'onetime').reduce((s, e) => s + num(e.amount), 0);
   const monTotal = list.filter(e => e.type !== 'onetime').reduce((s, e) => s + num(e.amount), 0);
@@ -1506,7 +1561,6 @@ function renderExpenses() {
   el.innerHTML = `
     <div class="view-header"><h2>Expenses <span class="muted">(vehicle & business — trip expenses are inside each trip)</span></h2>
       <button class="btn primary" onclick="openExpenseForm()">＋ Add Expense</button></div>
-    ${emiPanelHTML()}
     ${settlementPanelHTML()}
     <div class="filter-row">
       <input type="month" value="${expMonthFilter}" onchange="expMonthFilter=this.value; renderExpenses()">
